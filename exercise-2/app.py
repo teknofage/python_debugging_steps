@@ -1,64 +1,80 @@
-import os
-import requests
-
-from datetime import datetime, timedelta
-from dotenv import load_dotenv
-from flask import Flask, render_template, request, send_file
-
-
-################################################
-## SETUP
-################################################
-
+from flask import Flask, flash, request, render_template, redirect, url_for
+from flask_sqlalchemy import SQLAlchemy
+import enum
 app = Flask(__name__)
-
-load_dotenv()
-API_KEY = os.getenv('API_KEY')
-
-
-################################################
-## ROUTES
-################################################
-
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///database.db'
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.secret_key = b'_5#y2L"F4Q8z\n\xec]/'
+db = SQLAlchemy(app)
+###############################################
+### MODELS
+###############################################
+class PizzaSize(enum.Enum):
+    SMALL = '12 Inch'
+    MEDIUM = '16 Inch'
+    LARGE = '20 Inch'
+class CrustType(enum.Enum):
+    THIN = 'Thin'
+    THICK = 'Thick'
+    GLUTEN_FREE = 'Gluten Free'
+class ToppingType(enum.Enum):
+    SOY_CHEESE = 'Soy Cheese'
+    MUSHROOMS = 'Mushrooms'
+    ONIONS = 'Onions'
+    SPINACH = 'Spinach'
+    PINEAPPLE = 'Pineapple'
+class Pizza(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    order_name = db.Column(db.String(80), unique=False, nullable=False)
+    size = db.Column(db.Enum(PizzaSize), nullable=False)
+    crust_type = db.Column(db.Enum(CrustType), nullable=False)
+    toppings = db.relationship('PizzaTopping')
+    fulfilled = db.Column(db.Boolean, default=False)
+class PizzaTopping(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    topping_type = db.Column(db.Enum(ToppingType))
+    pizza_id = db.Column(db.Integer, db.ForeignKey('pizza.id'))
+with app.app_context():
+    db.create_all()
+###############################################
+### ROUTES
+###############################################
 @app.route('/')
 def home():
-    """Displays the homepage with forms for current or historical data."""
-    context = {
-        'min_date': (datetime.now() - timedelta(days=5)),
-        'max_date': datetime.now()
-    }
-    return render_template('home.html', **context)
-
-def get_letter_for_units(units):
-    """Returns a shorthand letter for the given units."""
-    return 'F' if units == 'imperial' else 'C' if units == 'metric' else 'K'
-
-@app.route('/results')
-def results():
-    """Displays results for current weather conditions."""
-    city = request.args.get('users_city')
-    units = request.args.get('requested_units')
-
-    url = 'http://api.openweathermap.org/data/2.5/weather'
-    params = {
-        'appid': API_KEY,
-        'place': city,
-        'units': units
-    }
-    result_json = requests.get(url, params=params).json()
-
-    context = {
-        'date': datetime.now(),
-        'city': result_json['name'],
-        'description': result_json['weather'][0]['description'],
-        'temp': result_json['main']['temperature'],
-        'humidity': result_json['main']['humidity'],
-        'wind_speed': result_json['wind']['speed'],
-        'units_letter': get_letter_for_units(units)
-    }
-
-    return render_template('results.html', **context)
-
-
+    all_pizzas = Pizza.query.filter_by(fulfilled=False)
+    return render_template('home.html', pizza_orders=all_pizzas)
+@app.route('/order', methods=['GET'])
+def pizza_order_form():
+    return render_template(
+        'order.html',
+        sizes=PizzaSize,
+        crust_types=CrustType,
+        toppings=ToppingType)
+@app.route('/order', methods=['POST'])
+def pizza_order_submit():
+    order_name = request.form.get('name')
+    pizza_size_str = request.form.get('size')
+    crust_type_str = request.form.get('crust_type')
+    toppings_list = request.form.get('toppings')
+    pizza = Pizza(
+        order_name=order_name,
+        size=pizza_size_str,
+        crust_type=crust_type_str)
+    print(pizza.order_name)
+    for topping_str in ToppingType:
+        pizza.toppings.append(PizzaTopping(topping_type=topping_str))
+    db.session.add(pizza)
+    db.session.commit()
+    flash('Your order has been submitted!')
+    return redirect(url_for('home'))
+@app.route('/fulfill', methods=['POST'])
+def fulfill_order():
+    pizza_id = request.form.get('pizza_id')
+    pizza = Pizza.query.filter_by(id=pizza_id).one()
+    pizza.fulfilled = True
+    db.session.add(pizza)
+    db.session.commit()
+    flash(f'The order for {pizza.order_name} has been fulfilled.')
+    return redirect(url_for('home'))
 if __name__ == '__main__':
-    app.run()
+    app.run(debug=True)
